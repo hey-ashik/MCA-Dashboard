@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
     <title>Course Admin Dashboard</title>
     <meta name="description" content="Professional admin dashboard for course management and AI predictions">
-    <link rel="stylesheet" href="styles.css?v=2.8">
+    <link rel="stylesheet" href="styles.css?v=2.9">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -335,10 +335,17 @@
 
                 <div class="table-container">
                     <div class="table-header"
-                        style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-                        <h3>Enrolled Students Info (<span id="cd-student-count">0</span>)</h3>
+                        style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; border-bottom: none; padding-bottom: 0;">
+                        <div style="display: flex; gap: 24px;">
+                            <h3 id="tabEnrolled" onclick="window.switchStudentTab('course_students')"
+                                style="cursor: pointer; padding-bottom: 12px; border-bottom: 2px solid var(--primary-color); margin: 0; transition: color 0.2s;">
+                                Enrolled Students Info (<span id="cd-student-count">0</span>)</h3>
+                            <h3 id="tabUnenrolled" onclick="window.switchStudentTab('course_unenrolled_students')"
+                                style="cursor: pointer; padding-bottom: 12px; color: var(--text-muted); border-bottom: 2px solid transparent; margin: 0; transition: color 0.2s;">
+                                Unpaid Students Info (<span id="cd-unenrolled-count">0</span>)</h3>
+                        </div>
                         <input type="text" id="studentSearchInput" placeholder="Search students..."
-                            style="padding: 8px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-md); font-family: inherit; font-size: 13px; outline: none; width: 250px; background: var(--card-bg); color: var(--text-main);">
+                            style="padding: 8px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-md); font-family: inherit; font-size: 13px; outline: none; width: 250px; background: var(--card-bg); color: var(--text-main); margin-bottom: 12px;">
                     </div>
                     <div class="table-responsive">
                         <table class="data-table">
@@ -597,7 +604,7 @@
     <!-- Global Toast Notification -->
     <div id="appToast" class="app-toast"></div>
 
-    <script src="app.js?v=2.8"></script>
+    <script src="app.js?v=2.9"></script>
 </body>
 
 </html>
