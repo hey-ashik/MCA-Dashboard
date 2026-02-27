@@ -58,7 +58,17 @@ function setupRealtime() {
 
     supabaseClient.channel('public:course_students')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'course_students' }, (payload) => {
-            if (window.currentCourseId) loadCourseStudents(window.currentCourseId);
+            if (window.currentCourseId && (!window.currentStudentsTable || window.currentStudentsTable === 'course_students')) {
+                loadCourseStudents(window.currentCourseId);
+            }
+        })
+        .subscribe();
+
+    supabaseClient.channel('public:course_unenrolled_students')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'course_unenrolled_students' }, (payload) => {
+            if (window.currentCourseId && window.currentStudentsTable === 'course_unenrolled_students') {
+                loadCourseStudents(window.currentCourseId);
+            }
         })
         .subscribe();
 }
@@ -566,28 +576,65 @@ window.closeCourseDetails = function () {
 }
 
 // Student Logic
+
+window.currentStudentsTable = 'course_students';
+
+window.switchStudentTab = function (tableName) {
+    window.currentStudentsTable = tableName;
+
+    const tabEnrolled = document.getElementById('tabEnrolled');
+    const tabUnenrolled = document.getElementById('tabUnenrolled');
+
+    if (tableName === 'course_students') {
+        tabEnrolled.style.borderBottom = '2px solid var(--primary-color)';
+        tabEnrolled.style.color = 'var(--text-main)';
+        tabUnenrolled.style.borderBottom = '2px solid transparent';
+        tabUnenrolled.style.color = 'var(--text-muted)';
+        document.getElementById('btnAddStudent').innerHTML = '<i class="fa-solid fa-plus"></i> Add Enrolled';
+    } else {
+        tabUnenrolled.style.borderBottom = '2px solid var(--primary-color)';
+        tabUnenrolled.style.color = 'var(--text-main)';
+        tabEnrolled.style.borderBottom = '2px solid transparent';
+        tabEnrolled.style.color = 'var(--text-muted)';
+        document.getElementById('btnAddStudent').innerHTML = '<i class="fa-solid fa-plus"></i> Add Unenrolled';
+    }
+
+    if (window.currentCourseId) {
+        loadCourseStudents(window.currentCourseId);
+    }
+}
+
 async function loadCourseStudents(courseId) {
     const tableBody = document.getElementById('course-students-table-body');
     if (!tableBody) return;
 
-    tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 24px; color: var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading students...</td></tr>`;
+    const targetTable = window.currentStudentsTable || 'course_students';
+    tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 24px; color: var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading students...</td></tr>`;
 
-    const { data, error } = await supabaseClient.from('course_students').select('*').eq('course_id', courseId).order('date', { ascending: false });
+    // Fetch the other count just in case
+    supabaseClient.from(targetTable === 'course_students' ? 'course_unenrolled_students' : 'course_students')
+        .select('*', { count: 'exact', head: true }).eq('course_id', courseId)
+        .then(({ count }) => {
+            const el = document.getElementById(targetTable === 'course_students' ? 'cd-unenrolled-count' : 'cd-student-count');
+            if (el && count !== null) el.textContent = count;
+        });
+
+    const { data, error } = await supabaseClient.from(targetTable).select('*').eq('course_id', courseId).order('date', { ascending: false });
 
     if (error) {
         if (error.code === '42P01') {
-            tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--danger); padding: 24px;">Supabase Table 'course_students' is missing! Please create it in your database with columns: id, course_id, student_name, date, phone, email, amount.</td></tr>`;
+            tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--danger); padding: 24px;">Supabase Table '${targetTable}' is missing! Please create it in your database with columns: id, course_id, student_name, date, phone, email, amount.</td></tr>`;
         } else {
-            tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--danger); padding: 24px;">${error.message}</td></tr>`;
+            tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--danger); padding: 24px;">${error.message}</td></tr>`;
         }
-        document.getElementById('cd-student-count').textContent = '0';
+        document.getElementById(targetTable === 'course_students' ? 'cd-student-count' : 'cd-unenrolled-count').textContent = '0';
         return;
     }
 
     if (!data || data.length === 0) {
         window.currentStudents = [];
-        tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">No students Information found.</td></tr>`;
-        document.getElementById('cd-student-count').textContent = '0';
+        tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 24px;">No students Information found.</td></tr>`;
+        document.getElementById(targetTable === 'course_students' ? 'cd-student-count' : 'cd-unenrolled-count').textContent = '0';
         return;
     }
 
@@ -599,11 +646,12 @@ function renderStudentsTable(studentsData) {
     const tableBody = document.getElementById('course-students-table-body');
     if (!tableBody) return;
 
-    document.getElementById('cd-student-count').textContent = studentsData.length;
+    const countEl = document.getElementById(window.currentStudentsTable === 'course_students' ? 'cd-student-count' : 'cd-unenrolled-count');
+    if (countEl) countEl.textContent = studentsData.length;
     tableBody.innerHTML = '';
 
     if (studentsData.length === 0) {
-        tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">No matching students found.</td></tr>`;
+        tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 24px;">No matching students found.</td></tr>`;
         return;
     }
 
@@ -682,14 +730,15 @@ function initCourseStudentsLogic() {
 
         const newStudent = { course_id: courseId, student_name: name, date, phone, email, amount: parseFloat(amount || 0) };
         const studentId = document.getElementById('studentId').value;
+        const targetTable = window.currentStudentsTable || 'course_students';
 
         try {
             if (studentId) {
-                const { error } = await supabaseClient.from('course_students').update(newStudent).eq('id', studentId);
+                const { error } = await supabaseClient.from(targetTable).update(newStudent).eq('id', studentId);
                 if (error) throw error;
                 showToast('Student updated successfully!', 'success');
             } else {
-                const { error } = await supabaseClient.from('course_students').insert([newStudent]);
+                const { error } = await supabaseClient.from(targetTable).insert([newStudent]);
                 if (error) throw error;
                 showToast('Student added successfully!', 'success');
             }
@@ -729,8 +778,10 @@ function initCourseStudentsLogic() {
             }
             if (students.length === 0) return showToast('No valid data found in CSV', 'error');
 
+            const targetTable = window.currentStudentsTable || 'course_students';
+
             try {
-                const { error } = await supabaseClient.from('course_students').insert(students);
+                const { error } = await supabaseClient.from(targetTable).insert(students);
                 if (error) throw error;
                 showToast(students.length + ' students imported successfully!', 'success');
                 loadCourseStudents(window.currentCourseId);
@@ -764,8 +815,10 @@ window.editStudent = function (studentId) {
 window.deleteStudent = async function (studentId) {
     if (!confirm('Are you sure you want to delete this student? This action cannot be undone.')) return;
 
+    const targetTable = window.currentStudentsTable || 'course_students';
+
     try {
-        const { error } = await supabaseClient.from('course_students').delete().eq('id', studentId);
+        const { error } = await supabaseClient.from(targetTable).delete().eq('id', studentId);
         if (error) throw error;
 
         showToast('Student deleted successfully!', 'success');
