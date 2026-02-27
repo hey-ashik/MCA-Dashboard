@@ -55,6 +55,12 @@ function setupRealtime() {
             fetchCourses().then(() => updateDashboardState());
         })
         .subscribe();
+
+    supabaseClient.channel('public:course_students')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'course_students' }, (payload) => {
+            if (window.currentCourseId) loadCourseStudents(window.currentCourseId);
+        })
+        .subscribe();
 }
 
 // DOM Elements
@@ -74,6 +80,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderDashboard();
     initCharts();
     initAIPredictor();
+    initCourseStudentsLogic();
 });
 
 // Authentication Logic
@@ -257,11 +264,16 @@ function initUI() {
 
     // Filtering Functionality (Dashboard Table)
     const coursePerformanceFilter = document.getElementById('coursePerformanceFilter');
+    const dashboardSearchInput = document.getElementById('dashboardSearchInput');
 
     window.executeDashboardTableFilter = function () {
-        if (!coursePerformanceFilter) return;
-        const filterStatus = coursePerformanceFilter.value;
+        const filterStatus = coursePerformanceFilter ? coursePerformanceFilter.value : 'all';
+        const query = dashboardSearchInput ? dashboardSearchInput.value.toLowerCase() : '';
         let filteredData = [...courseData];
+
+        if (query) {
+            filteredData = filteredData.filter(c => (c.name || '').toLowerCase().includes(query));
+        }
 
         if (filterStatus === 'pending') {
             filteredData = filteredData.filter(c => parseFloat(c.pending) > 0);
@@ -278,6 +290,10 @@ function initUI() {
 
     if (coursePerformanceFilter) {
         coursePerformanceFilter.addEventListener('change', window.executeDashboardTableFilter);
+    }
+
+    if (dashboardSearchInput) {
+        dashboardSearchInput.addEventListener('input', window.executeDashboardTableFilter);
     }
 
     // Pending Payments Card Redirect
@@ -514,16 +530,251 @@ window.deleteCourse = async function (id) {
     }
 }
 
-window.toggleCourseView = function (id) {
-    const detailsDiv = document.getElementById(`course-details-${id}`);
-    if (detailsDiv) {
-        if (detailsDiv.style.display === 'none') {
-            detailsDiv.style.display = 'block';
-        } else {
-            detailsDiv.style.display = 'none';
-        }
-    }
+window.openCourseDetails = function (id) {
+    const course = courseData.find(c => c.id === id);
+    if (!course) return;
+
+    // Hide all tabs
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelectorAll('.nav-links li').forEach(l => l.classList.remove('active'));
+
+    // Show details tab
+    const detailsTab = document.getElementById('course-details-tab');
+    if (detailsTab) detailsTab.classList.add('active');
+
+    // Populate data
+    document.getElementById('course-details-title').innerText = course.name;
+    document.getElementById('cd-total-enrolled').innerText = course.enrolled;
+    document.getElementById('cd-total-paid').innerText = formatCurrency(course.received);
+    document.getElementById('cd-total-pending').innerText = formatCurrency(course.pending);
+
+    const totalRev = Number(course.received || 0) + Number(course.pending || 0);
+    document.getElementById('cd-total-revenue').innerText = formatCurrency(totalRev);
+
+    window.currentCourseId = id;
+    loadCourseStudents(id);
 }
+
+window.closeCourseDetails = function () {
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    const coursesTab = document.getElementById('courses-tab');
+    if (coursesTab) coursesTab.classList.add('active');
+
+    // reset nav link
+    const coursesNav = document.querySelector('.nav-links li[data-tab="courses"]');
+    if (coursesNav) coursesNav.classList.add('active');
+}
+
+// Student Logic
+async function loadCourseStudents(courseId) {
+    const tableBody = document.getElementById('course-students-table-body');
+    if (!tableBody) return;
+
+    tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 24px; color: var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Loading students...</td></tr>`;
+
+    const { data, error } = await supabaseClient.from('course_students').select('*').eq('course_id', courseId).order('date', { ascending: false });
+
+    if (error) {
+        if (error.code === '42P01') {
+            tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--danger); padding: 24px;">Supabase Table 'course_students' is missing! Please create it in your database with columns: id, course_id, student_name, date, phone, email, amount.</td></tr>`;
+        } else {
+            tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--danger); padding: 24px;">${error.message}</td></tr>`;
+        }
+        document.getElementById('cd-student-count').textContent = '0';
+        return;
+    }
+
+    if (!data || data.length === 0) {
+        window.currentStudents = [];
+        tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">No students Information found.</td></tr>`;
+        document.getElementById('cd-student-count').textContent = '0';
+        return;
+    }
+
+    window.currentStudents = data;
+    renderStudentsTable(data);
+}
+
+function renderStudentsTable(studentsData) {
+    const tableBody = document.getElementById('course-students-table-body');
+    if (!tableBody) return;
+
+    document.getElementById('cd-student-count').textContent = studentsData.length;
+    tableBody.innerHTML = '';
+
+    if (studentsData.length === 0) {
+        tableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">No matching students found.</td></tr>`;
+        return;
+    }
+
+    studentsData.forEach(student => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><strong>${student.student_name}</strong></td>
+            <td>${student.date}</td>
+            <td>${student.phone}</td>
+            <td>${student.email || '-'}</td>
+            <td>${formatCurrency(student.amount)}</td>
+            <td style="display: flex; gap: 8px;">
+                <button class="btn btn-outline btn-sm" onclick="window.editStudent('${student.id}')"><i class="fa-solid fa-pen"></i></button>
+                <button class="btn btn-outline btn-sm" style="color: var(--danger); border-color: var(--danger);" onclick="window.deleteStudent('${student.id}')"><i class="fa-solid fa-trash"></i></button>
+            </td>
+        `;
+        tableBody.appendChild(tr);
+    });
+}
+
+function initCourseStudentsLogic() {
+    const studentModal = document.getElementById('studentModal');
+    if (!studentModal) return;
+
+    // Bind CSV upload button
+    document.getElementById('btnUploadCsv').addEventListener('click', () => {
+        document.getElementById('courseCsvUpload').click();
+    });
+
+    // Search functionality
+    const studentSearchInput = document.getElementById('studentSearchInput');
+    if (studentSearchInput) {
+        studentSearchInput.addEventListener('input', (e) => {
+            if (!window.currentStudents) return;
+            const term = e.target.value.toLowerCase();
+            const filtered = window.currentStudents.filter(s =>
+                (s.student_name && s.student_name.toLowerCase().includes(term)) ||
+                (s.phone && s.phone.toLowerCase().includes(term)) ||
+                (s.email && s.email.toLowerCase().includes(term))
+            );
+            renderStudentsTable(filtered);
+        });
+    }
+
+    document.getElementById('btnAddStudent').addEventListener('click', () => {
+        if (!window.currentCourseId) return;
+        document.getElementById('studentId').value = '';
+        document.getElementById('studentForm').reset();
+        document.getElementById('studentDate').valueAsDate = new Date();
+        document.getElementById('studentModalTitle').innerText = 'Add New Student';
+        document.getElementById('saveStudentBtn').innerText = 'Save Student';
+        studentModal.classList.add('active');
+    });
+
+    const closeStudentModals = () => studentModal.classList.remove('active');
+    document.getElementById('closeStudentModal').addEventListener('click', closeStudentModals);
+    document.getElementById('cancelStudentBtn').addEventListener('click', (e) => { e.preventDefault(); closeStudentModals(); });
+
+    document.getElementById('saveStudentBtn').addEventListener('click', async (e) => {
+        e.preventDefault();
+        const courseId = window.currentCourseId;
+        if (!courseId) return;
+
+        const name = document.getElementById('studentName').value;
+        const date = document.getElementById('studentDate').value;
+        const phone = document.getElementById('studentPhone').value;
+        const email = document.getElementById('studentEmail').value;
+        const amount = document.getElementById('studentAmount').value;
+
+        if (!name || !date || !phone) return showToast('Name, Date, and Phone are required', 'error');
+
+        const btn = document.getElementById('saveStudentBtn');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+        btn.disabled = true;
+
+        const newStudent = { course_id: courseId, student_name: name, date, phone, email, amount: parseFloat(amount || 0) };
+        const studentId = document.getElementById('studentId').value;
+
+        try {
+            if (studentId) {
+                const { error } = await supabaseClient.from('course_students').update(newStudent).eq('id', studentId);
+                if (error) throw error;
+                showToast('Student updated successfully!', 'success');
+            } else {
+                const { error } = await supabaseClient.from('course_students').insert([newStudent]);
+                if (error) throw error;
+                showToast('Student added successfully!', 'success');
+            }
+
+            closeStudentModals();
+            loadCourseStudents(courseId);
+        } catch (error) {
+            console.error(error);
+            showToast('Failed to save student. ' + error.message, 'error');
+        } finally {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    });
+
+    document.getElementById('courseCsvUpload').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file || !window.currentCourseId) return;
+
+        const reader = new FileReader();
+        reader.onload = async function (event) {
+            const text = event.target.result;
+            const rows = text.split(/\r?\n/).filter(r => r.trim() !== '');
+            const students = [];
+            for (let i = 1; i < rows.length; i++) {
+                const cols = rows[i].split(',');
+                if (cols.length >= 3) {
+                    students.push({
+                        course_id: window.currentCourseId,
+                        student_name: cols[0]?.trim(),
+                        date: cols[1]?.trim() || new Date().toISOString().split('T')[0],
+                        phone: cols[2]?.trim(),
+                        email: cols[3]?.trim() || null,
+                        amount: parseFloat(cols[4] || 0)
+                    });
+                }
+            }
+            if (students.length === 0) return showToast('No valid data found in CSV', 'error');
+
+            try {
+                const { error } = await supabaseClient.from('course_students').insert(students);
+                if (error) throw error;
+                showToast(students.length + ' students imported successfully!', 'success');
+                loadCourseStudents(window.currentCourseId);
+            } catch (error) {
+                console.error(error);
+                showToast('Import failed: ' + error.message, 'error');
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    });
+}
+
+window.editStudent = function (studentId) {
+    if (!window.currentStudents) return;
+    const student = window.currentStudents.find(s => s.id == studentId);
+    if (!student) return;
+
+    document.getElementById('studentId').value = student.id;
+    document.getElementById('studentName').value = student.student_name;
+    document.getElementById('studentDate').value = student.date;
+    document.getElementById('studentPhone').value = student.phone;
+    document.getElementById('studentEmail').value = student.email || '';
+    document.getElementById('studentAmount').value = student.amount || 0;
+
+    document.getElementById('studentModalTitle').innerText = 'Edit Student Info';
+    document.getElementById('saveStudentBtn').innerText = 'Update Student';
+    document.getElementById('studentModal').classList.add('active');
+};
+
+window.deleteStudent = async function (studentId) {
+    if (!confirm('Are you sure you want to delete this student? This action cannot be undone.')) return;
+
+    try {
+        const { error } = await supabaseClient.from('course_students').delete().eq('id', studentId);
+        if (error) throw error;
+
+        showToast('Student deleted successfully!', 'success');
+        if (window.currentCourseId) loadCourseStudents(window.currentCourseId);
+    } catch (error) {
+        console.error(error);
+        showToast('Error deleting student: ' + error.message, 'error');
+    }
+};
 
 // Render Dashboard Data
 function renderDashboard() {
@@ -573,26 +824,18 @@ function renderCoursesGrid(data) {
         card.style.padding = '16px';
         card.style.marginBottom = '12px';
         card.style.boxShadow = 'var(--shadow-sm)';
+        card.style.transition = 'all 0.2s';
 
         card.innerHTML = `
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="display: flex; align-items: center; gap: 16px; cursor: pointer;" onclick="window.openCourseDetails(${course.id})">
                     <div class="stat-icon courses-icon" style="width: 40px; height: 40px; font-size: 18px;"><i class="fa-solid fa-book"></i></div>
-                    <h3 style="color: var(--text-main); font-weight: 600; font-size: 16px; margin: 0;">${course.name || 'Unnamed Course'}</h3>
+                    <h3 style="color: var(--text-main); font-weight: 600; font-size: 16px; margin: 0; transition: color 0.2s;" onmouseover="this.style.color='var(--primary-color)'" onmouseout="this.style.color='var(--text-main)'">${course.name || 'Unnamed Course'}</h3>
                 </div>
                 <div style="display: flex; gap: 8px;">
-                    <button class="btn btn-outline btn-sm" onclick="toggleCourseView(${course.id})"><i class="fa-solid fa-eye"></i> View</button>
+                    <button class="btn btn-outline btn-sm" onclick="window.openCourseDetails(${course.id})"><i class="fa-solid fa-eye"></i> View</button>
                     <button class="btn btn-primary btn-sm" onclick="editCourse(${course.id})"><i class="fa-solid fa-pen"></i> Edit</button>
                     <button class="btn btn-outline btn-sm" style="color: var(--danger); border-color: var(--danger);" onclick="deleteCourse(${course.id})"><i class="fa-solid fa-trash"></i></button>
-                </div>
-            </div>
-            <div id="course-details-${course.id}" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--border-color);">
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px;">
-                    <div><small style="color: var(--text-muted)">Course Fee</small><br><strong style="font-size: 16px;">${formatCurrency(course.fee)}</strong></div>
-                    <div><small style="color: var(--text-muted)">Total Enrolled</small><br><strong style="font-size: 16px;">${course.enrolled}</strong></div>
-                    <div><small style="color: var(--text-muted)">Amount Received</small><br><strong style="font-size: 16px; color: var(--success);">${formatCurrency(course.received)}</strong></div>
-                    <div><small style="color: var(--text-muted)">Amount Pending</small><br><strong style="font-size: 16px; color: var(--warning);">${formatCurrency(course.pending)}</strong></div>
-                    <div><small style="color: var(--text-muted)">Status</small><br>${getStatusBadge(course.enrolled)}</div>
                 </div>
             </div>
         `;
